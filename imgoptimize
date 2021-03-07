@@ -1,84 +1,108 @@
-#!/bin/bash
+#!/bin/bash -e
+
+# ImgOptimize
 #
-# Copyright (c) 2014 Eduardo Klosowski
+# Copyright (c) 2021 Eduardo Klosowski
 # License: MIT (see LICENSE for details)
 #
 
-prog_jpg=$(which jpegoptim) || prog_jpg=$(which jpegtran)
-prog_png=$(which optipng)
-prog_gif=$(which gifsicle)
+
+optimize_gif() {
+    if which gifsicle > /dev/null; then
+        temp_file="$(mktemp --suffix=.gif)"
+        if ! gifsicle -O3 -o "$temp_file" "$1"; then
+            echo "Compression failed of $1"
+            rm "$temp_file"
+            return 1
+        fi
+        old_size="$(du -b "$1" | cut -f1)"
+        new_size="$(du -b "$temp_file" | cut -f1)"
+        if [ "$new_size" -lt "$old_size" ]; then
+            echo "$1 optimized in $((old_size - new_size)) bytes"
+            cat "$temp_file" > "$1"
+        else
+            echo "$1 already optimized"
+        fi
+        rm "$temp_file"
+    else
+        echo "gifsicle not found"
+        return 1
+    fi
+}
 
 
 optimize_jpg() {
-  if echo "$prog_jpg" | grep -q 'jpegoptim$'; then
-    jpegoptim -s "$1"
-  elif echo "$prog_jpg" | grep -q 'jpegtran$'; then
-    temp_file=$(tempfile -s '.jpg')
-    if ! $prog_jpg -copy none -progressive -outfile "$temp_file" "$1"; then
-      echo "Compression failed of $1"
-      rm "$temp_file"
-      return
-    fi
-    file_size=$(du -b "$1" | cut -f1)
-    temp_size=$(du -b "$temp_file" | cut -f1)
-    if [ "$file_size" -gt "$temp_size" ]; then
-      echo "$1 optimized in $((file_size - temp_size)) bytes"
-      mv "$temp_file" "$1"
+    if which jpegoptim > /dev/null; then
+        jpegoptim -s "$1"
+    elif which jpegtran > /dev/null; then
+        temp_file="$(mktemp --suffix=.jpg)"
+        if ! jpegtran -copy none -progressive -outfile "$temp_file" "$1"; then
+            echo "Compression failed of $1"
+            rm "$temp_file"
+            return 1
+        fi
+        old_size=$(du -b "$1" | cut -f1)
+        new_size=$(du -b "$temp_file" | cut -f1)
+        if [ "$new_size" -lt "$old_size" ]; then
+            echo "$1 optimized in $((old_size - new_size)) bytes"
+            cat "$temp_file" > "$1"
+        else
+            echo "$1 already optimized"
+        fi
+        rm "$temp_file"
     else
-      echo "$1 already optimized"
+        echo "jpegoptim or jpegtran not found"
+        return 1
     fi
-    [ -e "$temp_file" ] && rm "$temp_file"
-  else
-    echo "jpegoptim or jpegtran not found"
-  fi
 }
 
 
 optimize_png() {
-  if [ -z "$prog_png" ]; then
-    echo "optipng not found"
-    return
-  fi
-  $prog_png "$1"
+    if which optipng > /dev/null; then
+        if ! optipng -preserve "$1"; then
+            echo "Compression failed of $1"
+            return 1
+        fi
+    else
+        echo "optipng not found"
+        return 1
+    fi
 }
 
 
-optimize_gif() {
-  if [ -z "$prog_gif" ]; then
-    echo "gifsicle not found"
-    return
-  fi
-  temp_file=$(tempfile -s '.gif')
-  if ! $prog_gif -O3 -o "$temp_file" "$1"; then
-    echo "Compression failed of $1"
-    rm "$temp_file"
-    return
-  fi
-  file_size=$(du -b "$1" | cut -f1)
-  temp_size=$(du -b "$temp_file" | cut -f1)
-  if [ "$file_size" -gt "$temp_size" ]; then
-    echo "$1 optimized in $((file_size - temp_size)) bytes"
-    mv "$temp_file" "$1"
-  else
-    echo "$1 already optimized"
-  fi
-  [ -e "$temp_file" ] && rm "$temp_file"
+main() {
+    exitstatus=0
+    for filename in "$@"; do
+        if [ -e "$filename" ]; then
+            filetype="$(file "$filename" | sed -r 's/^.{'${#filename}'}: ([^ ]+).*/\1/')"
+            case "$filetype" in
+                GIF)
+                    if ! optimize_gif "$filename"; then
+                        exitstatus=1
+                    fi
+                    ;;
+                JPEG)
+                    if ! optimize_jpg "$filename"; then
+                        exitstatus=1
+                    fi
+                    ;;
+                PNG)
+                    if ! optimize_png "$filename"; then
+                        exitstatus=1
+                    fi
+                    ;;
+                *)
+                    echo "$filetype of $filename is not supported"
+                    exitstatus=2
+                    ;;
+            esac
+        else
+            echo "File $filename not found"
+            exitstatus=2
+        fi
+    done
+    exit $exitstatus
 }
 
 
-for filename in "$@"; do
-  filetype=$(file "$filename" | sed -r 's|^.{'${#filename}'}: ([^ ]+).*|\1|')
-  case "$filetype" in
-    JPEG)
-      optimize_jpg "$filename"
-      ;;
-    PNG)
-      optimize_png "$filename"
-      ;;
-    GIF)
-      optimize_gif "$filename"
-      ;;
-    *)
-      echo "$filetype of $filename is not supported"
-  esac
-done
+main "$@"
